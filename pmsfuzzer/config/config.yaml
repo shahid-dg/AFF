@@ -1,0 +1,123 @@
+# AndroidServiceFuzzer - PMS Fuzzer for Android 13
+# Production-ready configuration
+# Fully compatible with the current dynamic plugin system (invariants + mutations)
+
+# === Core ADB & Target Settings ===
+adb_path: "C:/Android/bin/adb.exe"               # Full path or just "adb" if in PATH
+service: "package"                       # Fixed to "package" for PMS targeting (validated by ConfigManager)
+max_tx: 120                              # Upper bound for transaction discovery (Android 13 PMS range)
+iterations: 20000                        # Total fuzz cases to run
+timeout: 8                               # Default ADB command timeout in seconds
+reboot_on_fatal: true                    # Restart framework on detected system_server crash
+
+# === Output & Persistence ===
+output_dir: "pms_fuzz_results"           # All results, seeds, findings, crashes saved here
+                                         # Directory is auto-created
+
+# === Fuzz Target Constraints ===
+users:
+  - -1                                   # All users / current user
+  - 0                                    # Primary / system user
+  - 10                                   # Work profile / secondary user
+  - 999                                  # Phantom / app cloning user
+
+system_uids:
+  - 0                                    # root / system
+  - 1000                                 # system_server
+  - 1001                                 # radio
+  - 1007                                 # logd
+  - 1010                                 # media
+  - 1027                                 # nfc
+  - 2000                                 # shell
+
+priv_perms:                              # Critical privileged/signature permissions to monitor
+  - "android.permission.INSTALL_PACKAGES"
+  - "android.permission.WRITE_SECURE_SETTINGS"
+  - "android.permission.INTERACT_ACROSS_USERS_FULL"
+  - "android.permission.MANAGE_USERS"
+  - "android.permission.CHANGE_COMPONENT_ENABLED_STATE"
+  - "android.permission.CLEAR_APP_USER_DATA"
+  - "android.permission.GRANT_RUNTIME_PERMISSIONS"
+  - "android.permission.REVOKE_RUNTIME_PERMISSIONS"
+
+known_pkgs:                              # Realistic packages for smarter seed generation/mutation
+  - "android"
+  - "com.android.settings"
+  - "com.android.systemui"
+  - "com.android.shell"
+  - "com.android.providers.settings"
+  - "com.android.vending"
+  - "com.google.android.gms"
+  - "com.android.permissioncontroller"
+
+# === Advanced Tuning ===
+log_level: "INFO"                        # Base logging level (overridable via CLI)
+seed_corpus_max_size: 1000               # Maximum saved seeds (enforced in generator)
+mutation_probability: 0.5                # Chance to mutate a seed vs generate fresh random
+crash_reward_score: 50                   # Score bonus for crash cases (higher = more reproduction focus)
+
+
+# === Plugin Configuration (Dynamic Loader) ===
+# === Advanced Tuning ===
+auto_sync_plugins: true   # Set to false to disable automatic plugin addition on startup
+                          # When false, new plugins must be added manually or via config_editor CLI
+# Plugins are discovered automatically from plugins/invariants/ and plugins/mutations/
+# Use flat key format:
+#   - Invariant plugins: <plugin_name>: true/false
+#   - Mutation plugins: mutations.<plugin_name>: true/false
+plugins:
+  enabled:
+    # === Invariant Plugins ===
+    package_state: true
+    permissions: true
+    xml_integrity: true
+    selinux_context: false
+    binder_stats: false
+
+    # === Mutation Plugins ===
+    # Prefix with "mutations." – these are loaded from plugins/mutations/
+    mutations.aggressive_bit_flip: true
+    mutations.parcel_corruption: true
+    # mutations.smart_mutation: false     # example – add your own mutation plugins here
+
+
+# === Device Management ===
+device:
+  type: "emulator"                 # "physical" or "emulator" (for single-device mode)
+  root_mode: "unrooted"            # "rooted" or "unrooted" – selects dedicated handler
+  timeout_seconds: 300
+  retry_interval_seconds: 10
+  require_root: false              # If true and root_mode=unrooted → fail early
+
+  # Emulator-specific (unchanged)
+  emulator:
+    api_level: 33
+    abi: "x86_64"
+    image_type: "google_apis"
+    avd_name: "fuzz_avd_13"
+    sdk_tools_path: "C:/Android/cmdline-tools/latest/bin"
+    emulator_path: "C:/Android/emulator/emulator.exe"
+    headless: true
+
+# === Fuzzer Advanced Features ===
+fuzzer:
+  multi_device:
+    enabled: false                 # Enable parallel fuzzing on all connected devices
+    max_concurrent: 4              # Thread/Process limit
+    serial_allowlist: []           # Optional: [] = all, or ["emulator-5554", "ABC123"]
+    serial_denylist: []            # Optional exclude list
+
+  frida:
+    enabled: false                 # Master switch for Frida instrumentation
+    server_version: "16.2.3"       # Must match host frida-tools version
+    script_path: "frida_scripts/pms_coverage.js"
+    deploy_on_start: true          # Auto-push/start frida-server
+    auto_root_for_frida: true      # If enabled and root_mode=unrooted → temporarily root emulator
+    coverage_output_dir: "coverage/frida"
+
+
+
+
+
+
+

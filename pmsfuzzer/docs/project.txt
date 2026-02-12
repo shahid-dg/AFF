@@ -1,0 +1,404 @@
+# AndroidServiceFuzzer Framework
+# =============================
+# This is a modular fuzzing framework for Android services, currently targeting
+# the Package Manager Service (PMS) on Android 13. It incorporates smart input
+# generation, state tracking, invariant checks, and feedback-guided mutations.
+# Designed for extensibility to other services and Android versions in the future.
+
+# Directory Structure:
+# - config.py: Configuration management
+# - generator.py: Input generation (random, mutation, grammar)
+# - executor.py: Executes ADB commands
+# - monitor.py: State snapshots and health monitoring
+# - analyzer.py: Invariant checks and analysis
+# - main.py: Orchestrator
+# - plugins/: Extensible plugins (e.g., invariants)
+# - Example usage: python main.py --config config.yaml
+
+# Requirements: Python 3.8+, PyYAML, hashlib, json, subprocess, pathlib, datetime, random, collections, logging
+# Install: pip install pyyaml
+
+# config.py
+import yaml
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+class ConfigManager:
+    def __init__(self, config_path='config.yaml'):
+        self.config = self.load_config(config_path)
+        self.validate_config()
+
+    def load_config(self, path):
+        with open(path, 'r') as f:
+            return yaml.safe_load(f)
+
+    def validate_config(self):
+        required_keys = ['adb_path', 'service', 'max_tx', 'iterations', 'output_dir', 'users', 'system_uids', 'priv_perms', 'known_pkgs']
+        for key in required_keys:
+            if key not in self.config:
+                raise ValueError(f"Missing config key: {key}")
+        logger.info("Config validated successfully.")
+
+    def get(self, key, default=None):
+        return self.config.get(key, default)
+
+# generator.py
+import random
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class InputGenerator:
+    def __init__(self, config):
+        self.config = config
+        self.users = config.get('users')
+        self.priv_perms = config.get('priv_perms')
+        self.known_pkgs = config.get('known_pkgs')
+        self.seed_corpus = self.load_seeds()  # Load or initialize seeds
+        self.grammar = self.load_grammar()    # PMS-specific grammar
+
+    def load_seeds(self):
+        # For now, start with empty; in production, load from file
+        return []  # List of dicts: {'tx': int, 'args': list of (type, value)}
+
+    def load_grammar(self):
+        # Simplified PMS transaction grammar (expand based on AOSP source)
+        # Example: tx 1 might expect s16 pkg, i32 user, etc.
+        return {
+            # Placeholder: Key=tx, value=list of arg types with constraints
+            'default': [('s16', 'package'), ('s16', 'permission'), ('i32', 'user'), ('i32', 'flags')]
+        }
+
+    def generate_random(self, tx):
+        args = []
+        for arg_type, arg_category in self.grammar.get(tx, self.grammar['default']):
+            if arg_type == 's16':
+                if arg_category == 'package':
+                    args.append((arg_type, self.rand_pkg()))
+                elif arg_category == 'permission':
+                    args.append((arg_type, self.rand_perm()))
+            elif arg_type == 'i32':
+                if arg_category == 'user':
+                    args.append((arg_type, random.choice(self.users)))
+                elif arg_category == 'flags':
+                    args.append((arg_type, self.rand_flags()))
+        return args
+
+    def mutate(self, seed):
+        # Simple mutation: flip bits, swap args, etc.
+        tx = seed['tx']
+        args = seed['args'][:]
+        mutation_type = random.choice(['flip_bit', 'swap', 'inject_edge'])
+        if mutation_type == 'flip_bit' and args:
+            idx = random.randint(0, len(args) - 1)
+            t, v = args[idx]
+            if isinstance(v, int):
+                v ^= 1 << random.randint(0, 31)  # Bit flip
+            elif isinstance(v, str):
+                v = v[:-1] if v else ''  # Truncate or modify
+            args[idx] = (t, v)
+        # Add more mutations...
+        return tx, args
+
+    def rand_pkg(self):
+        if random.random() < 0.4:
+            return random.choice(self.known_pkgs)
+        return f"com.fuzz.{random.randint(1, 999999)}"
+
+    def rand_perm(self):
+        if random.random() < 0.6:
+            return random.choice(list(self.priv_perms))
+        return f"android.permission.FUZZ_{random.randint(1, 99999)}"
+
+    def rand_flags(self):
+        return random.randint(0, 0xffffffff)
+
+    def add_seed(self, seed, score):
+        # Add high-score seeds
+        if score > 0:  # Threshold
+            self.seed_corpus.append(seed)
+            logger.info(f"Added new seed with score {score}")
+
+# executor.py
+import subprocess
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+class Executor:
+    def __init__(self, config):
+        self.adb_path = config.get('adb_path')
+        self.service = config.get('service')
+        self.timeout = config.get('timeout', 8)
+
+    def adb(self, cmd, timeout=None):
+        timeout = timeout or self.timeout
+        full_cmd = [self.adb_path] + cmd
+        try:
+            result = subprocess.run(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+            if result.returncode != 0:
+                logger.warning(f"ADB command failed: {full_cmd} - {result.stderr}")
+            return result
+        except subprocess.TimeoutExpired:
+            logger.error(f"ADB timeout: {full_cmd}")
+            return None
+
+    def discover_transactions(self, max_tx):
+        valid = []
+        for tx in range(1, max_tx + 1):
+            r = self.adb(["shell", "service", "call", self.service, str(tx)], timeout=2)
+            if r and "Parcel(" in r.stdout and "Exception" not in r.stdout:
+                valid.append(tx)
+        return valid
+
+    def run_case(self, tx, args):
+        cmd = ["shell", "service", "call", self.service, str(tx)]
+        for t, v in args:
+            cmd += [t, str(v)]
+        result = self.adb(cmd)
+        time.sleep(0.4)  # Settle time
+        return result
+
+    def restart_framework(self):
+        self.adb(["shell", "stop"])
+        time.sleep(1)
+        self.adb(["shell", "start"])
+        time.sleep(4)
+
+# monitor.py
+import hashlib
+import logging
+from datetime import datetime
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+class Monitor:
+    def __init__(self, config, executor):
+        self.config = config
+        self.executor = executor
+        self.seen_log_sigs = set()
+        self.output_dir = Path(config.get('output_dir'))
+        self.output_dir.mkdir(exist_ok=True)
+        self.results_file = self.output_dir / "cases.jsonl"
+        self.findings_file = self.output_dir / "findings.jsonl"
+        self.crashes_file = self.output_dir / "crashes.log"
+
+    def system_server_alive(self):
+        return bool(self.executor.adb(["shell", "pidof", "system_server"]).stdout.strip())
+
+    def snapshot_package(self, pkg):
+        return {
+            "pkg": pkg,
+            "dump": self.executor.adb(["shell", "dumpsys", "package", pkg]).stdout,
+            "uid": self.executor.adb(["shell", "cmd", "package", "get-package-uid", pkg]).stdout.strip(),
+            "path": self.executor.adb(["shell", "pm", "path", pkg]).stdout.strip(),
+            # Add deeper: permissions, SELinux if applicable
+        }
+
+    def snapshot_global_state(self):
+        return {
+            "packages_xml": self.executor.adb(["shell", "cat", "/data/system/packages.xml"]).stdout,
+            "runtime_perm": self.executor.adb(["shell", "cat", "/data/system/users/0/runtime-permissions.xml"]).stdout,
+            # Add more: dumpsys user, binder stats
+        }
+
+    def collect_logs(self):
+        out = self.executor.adb(["logcat", "-d", "-b", "system,crash", "*:E"]).stdout
+        sigs = set()
+        for line in out.splitlines():
+            if "PackageManager" in line or "system_server" in line:
+                sigs.add(hashlib.md5(line.encode()).hexdigest())
+        novelty = sigs - self.seen_log_sigs
+        self.seen_log_sigs.update(novelty)
+        return len(novelty), out
+
+    def clear_logs(self):
+        self.executor.adb(["logcat", "-c"])
+
+# analyzer.py
+import json
+import hashlib
+import difflib
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class Analyzer:
+    def __init__(self, config, monitor):
+        self.config = config
+        self.monitor = monitor
+        self.priv_perms = config.get('priv_perms')
+        self.reboot_on_fatal = config.get('reboot_on_fatal', True)
+
+    def invariant_checks(self, before, after):
+        issues = []
+        # UID change
+        if before["uid"] != after["uid"]:
+            issues.append({"type": "UID_CHANGE", "from": before["uid"], "to": after["uid"]})
+        # Privileged permission gain
+        for p in self.priv_perms:
+            if p not in before["dump"] and p in after["dump"]:
+                issues.append({"type": "PRIV_PERMISSION_GAIN", "perm": p})
+        # Path moved to system
+        if "/system/" not in before["path"] and "/system/" in after["path"]:
+            issues.append({"type": "SYSTEM_PARTITION_ESCALATION"})
+        # Add more: diff XMLs, permission consistency
+        return issues
+
+    def analyze_case(self, tx, pkg, args, before, after, alive, novelty, logs, global_before=None, global_after=None):
+        issues = self.invariant_checks(before, after)
+        # Differential diffing for global state
+        if global_before and global_after:
+            for key in global_before:
+                diff = list(difflib.ndiff(global_before[key].splitlines(), global_after[key].splitlines()))
+                if any(line.startswith('+') or line.startswith('-') for line in diff):
+                    issues.append({"type": "GLOBAL_STATE_CHANGE", "key": key, "diff": '\n'.join(diff)})
+
+        case = {
+            "time": datetime.utcnow().isoformat(),
+            "tx": tx,
+            "pkg": pkg,
+            "args": args,
+            "alive": alive,
+            "novel_log_count": novelty,
+            "issues": issues,
+        }
+        cid = hashlib.sha256(json.dumps(case).encode()).hexdigest()
+        case["id"] = cid
+
+        with self.monitor.results_file.open("a") as f:
+            f.write(json.dumps(case) + "\n")
+
+        if issues:
+            with self.monitor.findings_file.open("a") as f:
+                f.write(json.dumps(case, indent=2) + "\n")
+
+        if not alive:
+            with self.monitor.crashes_file.open("a") as f:
+                f.write(f"\n=== SYSTEM_SERVER_CRASH {cid} ===\n{logs}\n")
+            if self.reboot_on_fatal:
+                self.monitor.executor.restart_framework()
+
+        # Feedback score: novelty + len(issues)
+        score = novelty + len(issues)
+        return score, case
+
+# main.py (Orchestrator)
+import argparse
+import logging
+import random
+from config import ConfigManager
+from generator import InputGenerator
+from executor import Executor
+from monitor import Monitor
+from analyzer import Analyzer
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Android Service Fuzzer Framework")
+    parser.add_argument('--config', default='config.yaml', help='Path to config file')
+    parser.add_argument('--iterations', type=int, help='Override iterations')
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+    config = ConfigManager(args.config)
+    if args.iterations:
+        config.config['iterations'] = args.iterations
+
+    executor = Executor(config)
+    monitor = Monitor(config, executor)
+    analyzer = Analyzer(config, monitor)
+    generator = InputGenerator(config)
+
+    logger.info("[*] Discovering PMS transactions")
+    txs = executor.discover_transactions(config.get('max_tx'))
+    logger.info(f"[+] {len(txs)} live transactions")
+
+    for i in range(config.get('iterations')):
+        # Choose generation method: 50% random, 50% mutate if seeds available
+        if generator.seed_corpus and random.random() < 0.5:
+            seed = random.choice(generator.seed_corpus)
+            tx, args = generator.mutate(seed)
+        else:
+            tx = random.choice(txs)
+            args = generator.generate_random(tx)
+
+        pkg = generator.rand_pkg()  # Could mutate this too
+
+        before = monitor.snapshot_package(pkg)
+        global_before = monitor.snapshot_global_state()
+
+        monitor.clear_logs()
+        executor.run_case(tx, args)
+
+        alive = monitor.system_server_alive()
+        novelty, logs = monitor.collect_logs()
+        after = monitor.snapshot_package(pkg)
+        global_after = monitor.snapshot_global_state()
+
+        score, case = analyzer.analyze_case(tx, pkg, args, before, after, alive, novelty, logs, global_before, global_after)
+
+        # Feedback to generator
+        generator.add_seed({'tx': tx, 'args': args}, score)
+
+        if i % 100 == 0:
+            logger.info(f"[+] Iteration {i}")
+
+if __name__ == "__main__":
+    main()
+
+# Example config.yaml
+# ===================
+# adb_path: "adb"
+# service: "package"
+# max_tx: 120
+# iterations: 20000
+# output_dir: "pms_ultra_results"
+# timeout: 8
+# reboot_on_fatal: true
+# users: [-1, 0, 10, 999]
+# system_uids: [0, 1000]
+# priv_perms:
+#   - "android.permission.INSTALL_PACKAGES"
+#   - "android.permission.WRITE_SECURE_SETTINGS"
+#   - "android.permission.INTERACT_ACROSS_USERS_FULL"
+#   - "android.permission.MANAGE_USERS"
+# known_pkgs:
+#   - "android"
+#   - "com.android.settings"
+#   - "com.android.systemui"
+#   - "com.android.shell"
+
+# plugins/ (example invariant plugin)
+# For extensibility, create plugins/invariants.py
+# class CustomInvariant:
+#     def check(self, before, after):
+#         # Custom logic
+#         return issues
+# Then in analyzer, load and run plugins.
+
+
+
+
+
+plugins/
+├── __init__.py
+├── loader.py                # ← updated loader with dynamic discovery
+└── invariants/              # ← namespace package (no __init__.py needed in Python 3.3+)
+    ├── base.py
+    ├── package_invariants.py
+    ├── permission_invariants.py
+    ├── xml_integrity.py
+    └── ... (new files auto-discovered)
+
+
+
