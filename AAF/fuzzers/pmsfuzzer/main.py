@@ -9,7 +9,7 @@ import argparse
 import logging
 import random
 from typing import List
-from config import ConfigManager
+from AAF.config.scripts.pms_config import ConfigManager
 from generator import InputGenerator
 from executor import Executor
 from monitor import Monitor

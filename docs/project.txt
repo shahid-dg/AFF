@@ -402,3 +402,22 @@ plugins/
 
 
 
+device/
+├── __init__.py                  # Factory: get_device_manager() / get_multi_device_manager()
+├── base.py                      # Abstract DeviceInterface (shared methods)
+├── manager.py                   # MultiDeviceManager (handles lists of devices)
+├── utils.py                     # Shared helpers (wait_for_boot, retry, ADB wrappers)
+├── frida/                       # New: Frida integration (opt-in)
+│   ├── __init__.py
+│   └── frida_manager.py         # Deploy/start/stop frida-server, load scripts
+├── physical/                    # Physical device handlers (root/unroot separated)
+│   ├── __init__.py
+│   ├── physical_base.py         # Common physical logic (connection, stability checks)
+│   ├── rooted.py                # PhysicalRootedDevice (inherits base + root-specific: adb root, su checks)
+│   └── unrooted.py              # PhysicalUnrootedDevice (inherits base + unrooted limitations/warnings)
+└── emulator/                    # Emulator handlers (root/unroot separated)
+    ├── __init__.py
+    ├── emulator_base.py         # Common emulator logic (AVD creation, start/stop)
+    ├── avd_creator.py           # Dedicated AVD/image download helper
+    ├── rooted.py                # EmulatorRootedDevice (auto-roots via Magisk or su binary)
+    └── unrooted.py              # EmulatorUnrootedDevice (stock Google APIs image)

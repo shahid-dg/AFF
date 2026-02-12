@@ -14,7 +14,7 @@ import string
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from config import ConfigManager  # Assuming config.py is in the same directory
+from AAF.config.scripts.pms_config import ConfigManager  # Assuming config.py is in the same directory
 
 logger = logging.getLogger(__name__)
 

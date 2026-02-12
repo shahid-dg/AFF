@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Tuple
-from config import ConfigManager
+from AAF.config.scripts.pms_config import ConfigManager
 from monitor import Monitor
 from plugins.loader import get_plugin_loader  # <-- NEW: dynamic loader
 

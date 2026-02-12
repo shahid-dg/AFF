@@ -15,7 +15,7 @@ import logging
 import pkgutil
 from pathlib import Path
 from typing import List, Dict, Optional, Any
-from config import ConfigManager
+from AAF.config.scripts.pms_config import ConfigManager
 from .invariants.base import InvariantPlugin
 from .mutations.base import MutationPlugin  # New category
 from config_editor import auto_sync_plugins

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
-from config import ConfigManager
+from AAF.config.scripts.pms_config import ConfigManager
 from executor import Executor
 
 logger = logging.getLogger(__name__)

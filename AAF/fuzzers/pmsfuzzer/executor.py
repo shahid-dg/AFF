@@ -11,7 +11,7 @@ import time
 import logging
 from typing import List, Tuple, Any, Optional
 
-from config import ConfigManager
+from AAF.config.scripts.pms_config import ConfigManager
 
 logger = logging.getLogger(__name__)
 

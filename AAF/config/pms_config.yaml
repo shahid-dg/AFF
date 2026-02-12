@@ -89,7 +89,7 @@ device:
   retry_interval_seconds: 10
   require_root: false              # If true and root_mode=unrooted → fail early
 
-  # Emulator-specific (unchanged)
+  # Emulator-specific 
   emulator:
     api_level: 33
     abi: "x86_64"
